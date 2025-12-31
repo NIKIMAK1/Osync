@@ -45,7 +45,7 @@ kotlin {
 compose.desktop {
     application {
         // Указываем точку входа. Пакет будет "osync"
-        mainClass = "osync.MainKt"
+        mainClass = "osync.osync.MainKt"
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
