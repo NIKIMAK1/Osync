@@ -1,0 +1,33 @@
+name: Build Windows App
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest # <-- GitHub выделит Windows-машину
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build MSI and ZIP (Windows)
+        # Эта команда создаст exe/msi именно под Windows
+        run: ./gradlew :composeApp:packageDistributionForCurrentOS
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Osync-Windows
+          # Путь к собранным файлам
+          path: composeApp/build/compose/binaries/main/app/Osync
