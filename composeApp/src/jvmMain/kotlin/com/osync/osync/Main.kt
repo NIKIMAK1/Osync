@@ -21,6 +21,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import kotlinx.coroutines.launch
 import java.io.File
+import androidx.compose.ui.window.rememberWindowState
 
 // --- ЦВЕТОВАЯ ПАЛИТРА (Osu! Style) ---
 val OsuPink = Color(0xFFFF66AA)
@@ -346,8 +347,17 @@ fun ClientScreen(targetIp: String, onIpChange: (String) -> Unit, isSyncing: Bool
     }
 }
 
-fun main() = application {
-    Window(onCloseRequest = ::exitApplication, title = "Osync") {
-        App()
+fun main() {
+    application {
+        // Устанавливаем фиксированный размер окна при запуске
+        val windowState = rememberWindowState(width = 900.dp, height = 700.dp)
+
+        Window(
+            onCloseRequest = ::exitApplication,
+            title = "Osync",
+            state = windowState // <-- Применяем размер здесь
+        ) {
+            App()
+        }
     }
 }
