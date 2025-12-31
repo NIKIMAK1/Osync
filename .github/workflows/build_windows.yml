@@ -21,19 +21,19 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      # ШАГ 1: Используем createDistributable вместо packageDistribution
-      # Это создаст обычную папку с EXE файлом, без попыток сделать MSI установщик
-      - name: Create Exe Folder
+      # 1. Собираем портативную версию (папку с EXE)
+      - name: Create Distributable
         run: ./gradlew :composeApp:createDistributable
 
-      # ШАГ 2 (Отладка): Если снова будет ошибка, мы увидим в логах, какие папки создались
+      # 2. (Debug) Смотрим, что создалось (правильная команда для PowerShell)
       - name: List files (Debug)
-        run: dir composeApp\build\compose\binaries /s
+        run: Get-ChildItem composeApp\build\compose\binaries -Recurse
 
-      # ШАГ 3: Загружаем результат
+      # 3. Загружаем результат
+      # Мы указываем путь до папки 'app', чтобы он загрузил любую папку внутри,
+      # независимо от того, называется она 'Osync' или 'com.osync.osync'
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Osync-Windows
-          # Путь к папке, которую создает createDistributable
-          path: composeApp/build/compose/binaries/main/app/Osync
+          path: composeApp/build/compose/binaries/main/app/
