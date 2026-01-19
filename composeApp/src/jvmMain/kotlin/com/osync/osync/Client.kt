@@ -6,112 +6,147 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.utils.io.*
-import io.ktor.utils.io.core.*
-import io.ktor.utils.io.jvm.javaio.copyTo
+import io.ktor.utils.io.jvm.javaio.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.URLEncoder
 
 class SyncClient {
     private val httpClient = HttpClient(CIO) {
-        engine {
-            requestTimeout = 0 // Отключаем таймаут для больших файлов
-        }
+        engine { requestTimeout = 0 }
     }
 
-    suspend fun syncFrom(serverIp: String, localOsuDir: File, onLog: (String) -> Unit) = withContext(Dispatchers.IO) {
-        val baseUrl = "http://$serverIp:8080"
+    suspend fun syncFrom(serverIp: String, localOsuDir: File, gameType: String, onLog: (String) -> Unit) = withContext(Dispatchers.IO) {
+        val baseUrl = "http://$serverIp:8085"
+
+        if (!localOsuDir.exists()) localOsuDir.mkdirs()
 
         try {
-            // ШАГ 1: База данных
-            onLog("=== Начало синхронизации ===")
-            onLog("Скачивание client.realm...")
-
-            val dbResponse = httpClient.get("$baseUrl/realm")
-            if (dbResponse.status == HttpStatusCode.OK) {
-                val localDb = File(localOsuDir, "client.realm")
-
-                // Бекап старой базы
-                if (localDb.exists()) {
-                    val backup = File(localOsuDir, "client.realm.bak")
-                    if (backup.exists()) backup.delete()
-                    localDb.renameTo(backup)
+            try {
+                val remoteType = httpClient.get("$baseUrl/ping").bodyAsText()
+                if (remoteType != gameType) {
+                    onLog("ОШИБКА: На сервере выбран режим $remoteType, а у вас $gameType. Они должны совпадать!")
+                    return@withContext
                 }
+            } catch (e: Exception) {
+                onLog("Ошибка подключения к $serverIp. Проверьте IP и фаервол.")
+                return@withContext
+            }
 
-                // Сохранение новой
-                val channel = dbResponse.bodyAsChannel()
-                val tempFile = File(localOsuDir, "client.realm.tmp")
-                val stream = tempFile.outputStream()
-                channel.copyTo(stream)
-                stream.close()
-                tempFile.renameTo(localDb)
-                onLog("База данных обновлена.")
+            if (gameType == "LAZER") {
+                syncLazer(baseUrl, localOsuDir, onLog)
             } else {
-                onLog("Ошибка: Не удалось скачать client.realm")
-                return@withContext
+                syncStable(baseUrl, localOsuDir, onLog)
             }
 
-            // ШАГ 2: Список файлов
-            onLog("Получение списка файлов с сервера...")
-            val manifestResponse = httpClient.get("$baseUrl/manifest")
-            if (manifestResponse.status != HttpStatusCode.OK) {
-                onLog("Ошибка получения списка файлов")
-                return@withContext
-            }
-
-            val remoteHashes = manifestResponse.bodyAsText().lines()
-                .filter { it.isNotBlank() }
-                .toSet()
-
-            onLog("Файлов на сервере: ${remoteHashes.size}")
-
-            // ШАГ 3: Сравнение
-            val localFilesDir = File(localOsuDir, "files")
-            val localHashes = localFilesDir.walkTopDown()
-                .filter { it.isFile }
-                .map { it.name }
-                .toSet()
-
-            val toDownload = remoteHashes - localHashes
-
-            if (toDownload.isEmpty()) {
-                onLog("Все файлы уже на месте. Синхронизация завершена!")
-                return@withContext
-            }
-
-            onLog("Нужно скачать файлов: ${toDownload.size}")
-
-            // ШАГ 4: Скачивание
-            var downloaded = 0
-            toDownload.forEach { hash ->
-                val targetFile = OsuUtils.getFileByHash(localOsuDir, hash)
-                targetFile.parentFile.mkdirs() // Создаем папки
-
-                try {
-                    val fileResp = httpClient.get("$baseUrl/file/$hash")
-                    if (fileResp.status == HttpStatusCode.OK) {
-                        val ch = fileResp.bodyAsChannel()
-                        val fos = targetFile.outputStream()
-                        ch.copyTo(fos)
-                        fos.close()
-
-                        downloaded++
-                        if (downloaded % 10 == 0 || downloaded == toDownload.size) {
-                            onLog("Скачано: $downloaded / ${toDownload.size}")
-                        }
-                    } else {
-                        onLog("Ошибка скачивания файла: $hash")
-                    }
-                } catch (e: Exception) {
-                    onLog("Сбой при скачивании $hash: ${e.message}")
-                }
-            }
-
-            onLog("=== Готово! Перезапустите Osu! ===")
+            onLog("=== Готово! ===")
+            if (gameType == "STABLE") onLog("В Osu! Stable нажмите F5 в меню выбора песен.")
 
         } catch (e: Exception) {
             onLog("Критическая ошибка: ${e.message}")
             e.printStackTrace()
+        }
+    }
+
+    private suspend fun syncStable(baseUrl: String, localOsuDir: File, onLog: (String) -> Unit) {
+        val localSongs = File(localOsuDir, "Songs")
+        if (!localSongs.exists()) localSongs.mkdirs()
+
+        onLog("Получение списка песен с сервера...")
+        val manifestResponse = httpClient.get("$baseUrl/manifest")
+
+        val remoteFiles = manifestResponse.bodyAsText().lines()
+            .filter { it.isNotBlank() }
+            .toSet()
+
+        onLog("Файлов на сервере: ${remoteFiles.size}")
+
+        val localFiles = localSongs.walkTopDown()
+            .filter { it.isFile }
+            .map { it.relativeTo(localSongs).path.replace("\\", "/") }
+            .toSet()
+
+        val toDownload = remoteFiles - localFiles
+
+        if (toDownload.isEmpty()) {
+            onLog("Все песни уже на месте!")
+            return
+        }
+
+        onLog("Нужно скачать файлов: ${toDownload.size}")
+
+        var downloaded = 0
+        toDownload.forEach { relativePath ->
+            val targetFile = File(localSongs, relativePath)
+            targetFile.parentFile.mkdirs()
+
+            try {
+                val encodedPath = URLEncoder.encode(relativePath, "UTF-8").replace("+", "%20")
+                val fileResp = httpClient.get("$baseUrl/stable-file?path=$encodedPath")
+
+                if (fileResp.status == HttpStatusCode.OK) {
+                    val ch = fileResp.bodyAsChannel()
+                    val fos = targetFile.outputStream()
+                    ch.copyTo(fos)
+                    fos.close()
+
+                    downloaded++
+                    if (downloaded % 10 == 0 || downloaded == toDownload.size) {
+                        onLog("Скачано: $downloaded / ${toDownload.size}")
+                    }
+                } else {
+                    onLog("Ошибка скачивания: $relativePath")
+                }
+            } catch (e: Exception) {
+                onLog("Сбой: $relativePath (${e.message})")
+            }
+        }
+    }
+
+    private suspend fun syncLazer(baseUrl: String, localOsuDir: File, onLog: (String) -> Unit) {
+        onLog("Скачивание client.realm...")
+        val dbResponse = httpClient.get("$baseUrl/realm")
+        if (dbResponse.status == HttpStatusCode.OK) {
+            val localDb = File(localOsuDir, "client.realm")
+            if (localDb.exists()) localDb.renameTo(File(localOsuDir, "client.realm.bak"))
+
+            val tempFile = File(localOsuDir, "client.realm.tmp")
+            val ch = dbResponse.bodyAsChannel()
+            val fos = tempFile.outputStream()
+            ch.copyTo(fos)
+            fos.close()
+
+            if (localDb.exists()) localDb.delete()
+            tempFile.renameTo(localDb)
+            onLog("База данных обновлена.")
+        }
+
+        onLog("Получение списка хешей...")
+        val manifestResponse = httpClient.get("$baseUrl/manifest")
+        val remoteHashes = manifestResponse.bodyAsText().lines().filter { it.isNotBlank() }.toSet()
+
+        val localFilesDir = File(localOsuDir, "files")
+        val localHashes = localFilesDir.walkTopDown().filter { it.isFile }.map { it.name }.toSet()
+        val toDownload = remoteHashes - localHashes
+
+        onLog("Нужно скачать: ${toDownload.size}")
+
+        var downloaded = 0
+        toDownload.forEach { hash ->
+            val targetFile = OsuUtils.getLazerFileByHash(localOsuDir, hash)
+            targetFile.parentFile.mkdirs()
+            try {
+                val resp = httpClient.get("$baseUrl/file/$hash")
+                if (resp.status == HttpStatusCode.OK) {
+                    val ch = resp.bodyAsChannel()
+                    val fos = targetFile.outputStream()
+                    ch.copyTo(fos)
+                    fos.close()
+                    downloaded++
+                    if (downloaded % 10 == 0) onLog("Скачано: $downloaded")
+                }
+            } catch (e: Exception) { onLog("Сбой: $hash") }
         }
     }
 }

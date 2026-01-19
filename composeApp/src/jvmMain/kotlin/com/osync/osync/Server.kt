@@ -9,49 +9,73 @@ import io.ktor.server.routing.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.URLEncoder
 
-class SyncServer(private val osuDir: File, private val port: Int = 8080) {
+class SyncServer(private val osuDir: File, private val gameType: String, private val port: Int = 8085) {
     private var server: NettyApplicationEngine? = null
 
     fun start() {
         server = embeddedServer(Netty, port = port) {
             routing {
-                // 1. Скачать базу данных
-                get("/realm") {
-                    val dbFile = File(osuDir, "client.realm")
-                    if (dbFile.exists()) {
-                        call.respondFile(dbFile)
-                    } else {
-                        call.respond(HttpStatusCode.NotFound, "DB not found")
+
+                get("/ping") { call.respondText(gameType) }
+
+                if (gameType == "LAZER") {
+                    get("/realm") {
+                        val dbFile = File(osuDir, "client.realm")
+                        if (dbFile.exists()) call.respondFile(dbFile) else call.respond(HttpStatusCode.NotFound)
+                    }
+
+                    get("/manifest") {
+                        val filesDir = File(osuDir, "files")
+                        val hashes = withContext(Dispatchers.IO) {
+                            filesDir.walkTopDown()
+                                .filter { it.isFile && it.name.length > 2 }
+                                .map { it.name }
+                                .joinToString("\n")
+                        }
+                        call.respondText(hashes)
+                    }
+
+                    get("/file/{hash}") {
+                        val hash = call.parameters["hash"] ?: return@get
+                        val file = OsuUtils.getLazerFileByHash(osuDir, hash)
+                        if (file.exists()) call.respondFile(file) else call.respond(HttpStatusCode.NotFound)
                     }
                 }
+                else if (gameType == "STABLE") {
 
-                // 2. Получить список всех файлов (манифест)
-                get("/manifest") {
-                    val filesDir = File(osuDir, "files")
-                    // Ищем все файлы внутри папки files, имена которых длинные (хеши)
-                    val hashes = withContext(Dispatchers.IO) {
-                        filesDir.walkTopDown()
-                            .filter { it.isFile && it.name.length > 2 }
-                            .map { it.name }
-                            .joinToString("\n")
-                    }
-                    call.respondText(hashes)
-                }
+                    get("/manifest") {
+                        val songsDir = File(osuDir, "Songs")
+                        if (!songsDir.exists()) {
+                            call.respondText("")
+                            return@get
+                        }
 
-                // 3. Скачать конкретный файл
-                get("/file/{hash}") {
-                    val hash = call.parameters["hash"]
-                    if (hash == null) {
-                        call.respond(HttpStatusCode.BadRequest)
-                        return@get
+                        val fileList = withContext(Dispatchers.IO) {
+                            songsDir.walkTopDown()
+                                .filter { it.isFile }
+                                .map { it.relativeTo(songsDir).path.replace("\\", "/") } // Windows слэши в Unix
+                                .joinToString("\n")
+                        }
+                        call.respondText(fileList)
                     }
 
-                    val file = OsuUtils.getFileByHash(osuDir, hash)
-                    if (file.exists()) {
-                        call.respondFile(file)
-                    } else {
-                        call.respond(HttpStatusCode.NotFound)
+                    get("/stable-file") {
+                        val path = call.request.queryParameters["path"]
+                        if (path == null) {
+                            call.respond(HttpStatusCode.BadRequest)
+                            return@get
+                        }
+
+                        val songsDir = File(osuDir, "Songs")
+                        val requestedFile = File(songsDir, path)
+
+                        if (requestedFile.canonicalPath.startsWith(songsDir.canonicalPath) && requestedFile.exists()) {
+                            call.respondFile(requestedFile)
+                        } else {
+                            call.respond(HttpStatusCode.NotFound)
+                        }
                     }
                 }
             }
