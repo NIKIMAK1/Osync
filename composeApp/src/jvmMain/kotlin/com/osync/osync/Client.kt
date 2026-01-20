@@ -7,30 +7,46 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.utils.io.*
 import io.ktor.utils.io.jvm.javaio.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.net.URLEncoder
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.coroutineContext
 
 class SyncClient {
     private val httpClient = HttpClient(CIO) {
-        engine { requestTimeout = 0 }
+        engine {
+            requestTimeout = 0
+            endpoint {
+                maxConnectionsPerRoute = 100
+                pipelineMaxSize = 20
+                keepAliveTime = 5000
+                connectTimeout = 5000
+            }
+        }
     }
 
-    suspend fun syncFrom(serverIp: String, localOsuDir: File, gameType: String, onLog: (String) -> Unit) = withContext(Dispatchers.IO) {
-        val baseUrl = "http://$serverIp:8085"
+    private val semaphore = Semaphore(50)
 
-        if (!localOsuDir.exists()) localOsuDir.mkdirs()
+    suspend fun syncFrom(inputAddress: String, localOsuDir: File, gameType: String, onLog: (String) -> Unit) = withContext(Dispatchers.IO) {
+        val baseUrl = if (inputAddress.startsWith("http")) inputAddress.removeSuffix("/") else "http://$inputAddress:8085"
+
+        if (!localOsuDir.exists()) {
+            onLog(AppRes.string.errFolderNotFound)
+            localOsuDir.mkdirs()
+        }
 
         try {
             try {
                 val remoteType = httpClient.get("$baseUrl/ping").bodyAsText()
                 if (remoteType != gameType) {
-                    onLog("ОШИБКА: На сервере выбран режим $remoteType, а у вас $gameType. Они должны совпадать!")
+                    onLog("Error: Mode mismatch (Server: $remoteType, You: $gameType)")
                     return@withContext
                 }
             } catch (e: Exception) {
-                onLog("Ошибка подключения к $serverIp. Проверьте IP и фаервол.")
+                onLog("Connection error: $baseUrl")
                 return@withContext
             }
 
@@ -40,113 +56,110 @@ class SyncClient {
                 syncStable(baseUrl, localOsuDir, onLog)
             }
 
-            onLog("=== Готово! ===")
-            if (gameType == "STABLE") onLog("В Osu! Stable нажмите F5 в меню выбора песен.")
+            onLog(AppRes.string.statusDone)
+            if (gameType == "STABLE") onLog("Osu! Stable: Press F5 to refresh.")
 
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            onLog(AppRes.string.statusStoppedByUser)
+            throw e
         } catch (e: Exception) {
-            onLog("Критическая ошибка: ${e.message}")
+            onLog("Error: ${e.message}")
             e.printStackTrace()
         }
     }
 
-    private suspend fun syncStable(baseUrl: String, localOsuDir: File, onLog: (String) -> Unit) {
+    private suspend fun syncStable(baseUrl: String, localOsuDir: File, onLog: (String) -> Unit) = coroutineScope {
         val localSongs = File(localOsuDir, "Songs")
         if (!localSongs.exists()) localSongs.mkdirs()
 
-        onLog("Получение списка песен с сервера...")
+        onLog(AppRes.string.statusChecking)
         val manifestResponse = httpClient.get("$baseUrl/manifest")
-
-        val remoteFiles = manifestResponse.bodyAsText().lines()
-            .filter { it.isNotBlank() }
-            .toSet()
-
-        onLog("Файлов на сервере: ${remoteFiles.size}")
+        val remoteFiles = manifestResponse.bodyAsText().lines().filter { it.isNotBlank() }.toSet()
 
         val localFiles = localSongs.walkTopDown()
             .filter { it.isFile }
             .map { it.relativeTo(localSongs).path.replace("\\", "/") }
             .toSet()
 
-        val toDownload = remoteFiles - localFiles
-
+        val toDownload = (remoteFiles - localFiles).toList()
         if (toDownload.isEmpty()) {
-            onLog("Все песни уже на месте!")
-            return
+            onLog(AppRes.string.statusDone)
+            return@coroutineScope
         }
+        onLog("Files to download: ${toDownload.size}")
 
-        onLog("Нужно скачать файлов: ${toDownload.size}")
+        val downloaded = AtomicInteger(0)
+        val total = toDownload.size
 
-        var downloaded = 0
-        toDownload.forEach { relativePath ->
-            val targetFile = File(localSongs, relativePath)
-            targetFile.parentFile.mkdirs()
-
-            try {
-                val encodedPath = URLEncoder.encode(relativePath, "UTF-8").replace("+", "%20")
-                val fileResp = httpClient.get("$baseUrl/stable-file?path=$encodedPath")
-
-                if (fileResp.status == HttpStatusCode.OK) {
-                    val ch = fileResp.bodyAsChannel()
-                    val fos = targetFile.outputStream()
-                    ch.copyTo(fos)
-                    fos.close()
-
-                    downloaded++
-                    if (downloaded % 10 == 0 || downloaded == toDownload.size) {
-                        onLog("Скачано: $downloaded / ${toDownload.size}")
-                    }
-                } else {
-                    onLog("Ошибка скачивания: $relativePath")
+        toDownload.map { relativePath ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    coroutineContext.ensureActive()
+                    val targetFile = File(localSongs, relativePath)
+                    if (!targetFile.parentFile.exists()) targetFile.parentFile.mkdirs()
+                    try {
+                        val encodedPath = URLEncoder.encode(relativePath, "UTF-8").replace("+", "%20")
+                        val fileResp = httpClient.get("$baseUrl/stable-file?path=$encodedPath")
+                        if (fileResp.status == HttpStatusCode.OK) {
+                            val ch = fileResp.bodyAsChannel()
+                            val fos = targetFile.outputStream()
+                            ch.copyTo(fos)
+                            fos.close()
+                            val current = downloaded.incrementAndGet()
+                            if (current % 50 == 0 || current == total) onLog("Loaded: $current / $total")
+                        }
+                    } catch (e: Exception) { }
                 }
-            } catch (e: Exception) {
-                onLog("Сбой: $relativePath (${e.message})")
             }
-        }
+        }.awaitAll()
     }
 
-    private suspend fun syncLazer(baseUrl: String, localOsuDir: File, onLog: (String) -> Unit) {
-        onLog("Скачивание client.realm...")
+    private suspend fun syncLazer(baseUrl: String, localOsuDir: File, onLog: (String) -> Unit) = coroutineScope {
+        onLog("Downloading client.realm...")
         val dbResponse = httpClient.get("$baseUrl/realm")
         if (dbResponse.status == HttpStatusCode.OK) {
             val localDb = File(localOsuDir, "client.realm")
             if (localDb.exists()) localDb.renameTo(File(localOsuDir, "client.realm.bak"))
-
             val tempFile = File(localOsuDir, "client.realm.tmp")
             val ch = dbResponse.bodyAsChannel()
             val fos = tempFile.outputStream()
             ch.copyTo(fos)
             fos.close()
-
             if (localDb.exists()) localDb.delete()
             tempFile.renameTo(localDb)
-            onLog("База данных обновлена.")
+            onLog("Database updated.")
         }
 
-        onLog("Получение списка хешей...")
+        onLog(AppRes.string.statusChecking)
         val manifestResponse = httpClient.get("$baseUrl/manifest")
         val remoteHashes = manifestResponse.bodyAsText().lines().filter { it.isNotBlank() }.toSet()
-
         val localFilesDir = File(localOsuDir, "files")
         val localHashes = localFilesDir.walkTopDown().filter { it.isFile }.map { it.name }.toSet()
-        val toDownload = remoteHashes - localHashes
+        val toDownload = (remoteHashes - localHashes).toList()
 
-        onLog("Нужно скачать: ${toDownload.size}")
+        onLog("Files to download: ${toDownload.size}")
+        val downloaded = AtomicInteger(0)
+        val total = toDownload.size
 
-        var downloaded = 0
-        toDownload.forEach { hash ->
-            val targetFile = OsuUtils.getLazerFileByHash(localOsuDir, hash)
-            targetFile.parentFile.mkdirs()
-            try {
-                val resp = httpClient.get("$baseUrl/file/$hash")
-                if (resp.status == HttpStatusCode.OK) {
-                    val ch = resp.bodyAsChannel()
-                    val fos = targetFile.outputStream()
-                    ch.copyTo(fos)
-                    fos.close()
-                    downloaded++
-                    if (downloaded % 10 == 0) onLog("Скачано: $downloaded")
+        toDownload.map { hash ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    coroutineContext.ensureActive()
+                    val targetFile = OsuUtils.getLazerFileByHash(localOsuDir, hash)
+                    if (!targetFile.parentFile.exists()) targetFile.parentFile.mkdirs()
+                    try {
+                        val resp = httpClient.get("$baseUrl/file/$hash")
+                        if (resp.status == HttpStatusCode.OK) {
+                            val ch = resp.bodyAsChannel()
+                            val fos = targetFile.outputStream()
+                            ch.copyTo(fos)
+                            fos.close()
+                            val current = downloaded.incrementAndGet()
+                            if (current % 50 == 0 || current == total) onLog("Loaded: $current / $total")
+                        }
+                    } catch (e: Exception) { }
                 }
-            } catch (e: Exception) { onLog("Сбой: $hash") }
-        }
+            }
+        }.awaitAll()
     }
 }
