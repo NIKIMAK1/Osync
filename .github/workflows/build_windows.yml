@@ -1,12 +1,11 @@
-name: Build Windows App
+name: Build Windows Installer (MSI)
 
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch:
 
 jobs:
-  build-windows:
+  build-msi:
     runs-on: windows-latest
 
     steps:
@@ -21,19 +20,11 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      # 1. Собираем портативную версию (папку с EXE)
-      - name: Create Distributable
-        run: ./gradlew :composeApp:createDistributable
+      - name: Build MSI
+        run: ./gradlew :composeApp:packageMsi
 
-      # 2. (Debug) Смотрим, что создалось (правильная команда для PowerShell)
-      - name: List files (Debug)
-        run: Get-ChildItem composeApp\build\compose\binaries -Recurse
-
-      # 3. Загружаем результат
-      # Мы указываем путь до папки 'app', чтобы он загрузил любую папку внутри,
-      # независимо от того, называется она 'Osync' или 'com.osync.osync'
-      - name: Upload Build Artifacts
+      - name: Upload Installer
         uses: actions/upload-artifact@v4
         with:
-          name: Osync-Windows
-          path: composeApp/build/compose/binaries/main/app/
+          name: Osync-Installer
+          path: composeApp/build/compose/binaries/main/msi/Osync-1.0.0.msi
