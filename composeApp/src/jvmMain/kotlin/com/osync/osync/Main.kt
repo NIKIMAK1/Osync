@@ -271,10 +271,21 @@ fun ServerScreen(ip: String, isRunning: Boolean, gameType: String, onToggleServe
 
 fun main() {
     System.setProperty("flatlaf.useWindowDecorations", "true")
+    System.setProperty("flatlaf.menuBarEmbedded", "false")
+
     FlatDarkLaf.setup()
+
     application {
         val windowState = rememberWindowState(width = 1000.dp, height = 800.dp)
-        Window(onCloseRequest = ::exitApplication, title = "Osync", state = windowState, icon = painterResource("icon.png")) {
+
+        Window(
+            onCloseRequest = ::exitApplication,
+            title = "Osync",
+            state = windowState,
+            icon = painterResource("icon.png")
+        ) {
+            window.rootPane.background = java.awt.Color(28, 27, 31)
+
             App()
         }
     }
