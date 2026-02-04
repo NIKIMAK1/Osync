@@ -30,6 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
 import java.io.File
+import javax.swing.JFrame
 
 val OsuPink = Color(0xFFFF66AA)
 val DarkSurface = Color(0xFF1C1B1F)
@@ -271,7 +272,9 @@ fun ServerScreen(ip: String, isRunning: Boolean, gameType: String, onToggleServe
 
 fun main() {
     System.setProperty("flatlaf.useWindowDecorations", "true")
-    System.setProperty("flatlaf.menuBarEmbedded", "false")
+    System.setProperty("flatlaf.menuBarEmbedded", "true")
+
+    JFrame.setDefaultLookAndFeelDecorated(true)
 
     FlatDarkLaf.setup()
 
@@ -284,7 +287,9 @@ fun main() {
             state = windowState,
             icon = painterResource("icon.png")
         ) {
-            window.rootPane.background = java.awt.Color(28, 27, 31)
+            SideEffect {
+                window.rootPane.putClientProperty("flatlaf.menuBarEmbedded", true)
+            }
 
             App()
         }
