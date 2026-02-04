@@ -2,15 +2,16 @@ name: Build Desktop Apps
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
-  #Windows (MSI + Portable ZIP)
+  # Windows (MSI + Portable ZIP)
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -21,7 +22,11 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       - name: Build Windows Apps
-        run: ./gradlew :composeApp:packageMsi :composeApp:packageZip
+        run: ./gradlew :composeApp:packageMsi :composeApp:createDistributable
+
+      - name: Create Portable Zip
+        run: |
+          Compress-Archive -Path composeApp/build/compose/binaries/main/app/Osync -DestinationPath Osync-Portable.zip
 
       - name: Upload Windows MSI
         uses: actions/upload-artifact@v4
@@ -33,9 +38,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Osync-Windows-Portable
-          path: composeApp/build/compose/binaries/main/zip/*.zip
+          path: Osync-Portable.zip
 
-  #Linux (AppImage)
+  # Linux (AppImage)
   build-linux:
     runs-on: ubuntu-latest
     steps:
@@ -53,13 +58,15 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfuse2
+          sudo apt-get install -y libfuse2 file wget
 
       - name: Build Linux AppImage
-        run: ./gradlew :composeApp:packageAppImage
+        run: |
+          chmod +x create_appimage.sh
+          ./create_appimage.sh
 
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
         with:
           name: Osync-Linux-AppImage
-          path: composeApp/build/compose/binaries/main/appimage/*.AppImage
+          path: Osync.AppImage
