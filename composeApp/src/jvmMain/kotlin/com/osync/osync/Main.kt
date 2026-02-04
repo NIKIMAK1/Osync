@@ -273,6 +273,11 @@ fun ServerScreen(ip: String, isRunning: Boolean, gameType: String, onToggleServe
 fun main() {
     System.setProperty("flatlaf.useWindowDecorations", "true")
     System.setProperty("flatlaf.menuBarEmbedded", "true")
+    System.setProperty("flatlaf.titleBarBackground", "false")
+
+    if (System.getProperty("os.name").lowercase().contains("windows")) {
+        System.setProperty("flatlaf.useNativeWindowDecorations", "true")
+    }
 
     JFrame.setDefaultLookAndFeelDecorated(true)
 
@@ -285,10 +290,13 @@ fun main() {
             onCloseRequest = ::exitApplication,
             title = "Osync",
             state = windowState,
-            icon = painterResource("icon.png")
+            icon = painterResource("icon.png"),
+            undecorated = false
         ) {
             SideEffect {
                 window.rootPane.putClientProperty("flatlaf.menuBarEmbedded", true)
+                window.rootPane.putClientProperty("JRootPane.titleBarBackground", java.awt.Color(18, 18, 18))
+                window.rootPane.putClientProperty("JRootPane.titleBarForeground", java.awt.Color.WHITE)
             }
 
             App()
