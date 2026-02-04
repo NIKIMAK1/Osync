@@ -6,12 +6,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -19,18 +21,14 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Window
-import androidx.compose.ui.window.application
-import androidx.compose.ui.window.rememberWindowState
+import androidx.compose.ui.window.*
 import com.formdev.flatlaf.FlatDarkLaf
 import io.github.vinceglb.filekit.compose.rememberDirectoryPickerLauncher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.jetbrains.compose.resources.painterResource
 import java.io.File
-import javax.swing.JFrame
 
 val OsuPink = Color(0xFFFF66AA)
 val DarkSurface = Color(0xFF1C1B1F)
@@ -50,9 +48,9 @@ fun OsyncTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = AppColorScheme, typography = Typography(), content = content)
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
-fun App() {
+fun WindowScope.App(window: FrameWindowScope) {
     val scope = rememberCoroutineScope()
     val STR = AppRes.string
 
@@ -85,112 +83,253 @@ fun App() {
     }
     var isLanguageMenuExpanded by remember { mutableStateOf(false) }
 
+    LaunchedEffect(Unit) {
+        (window.window as? java.awt.Frame)?.isResizable = false
+    }
+
     OsyncTheme {
-        Scaffold(
-            topBar = {
-                CenterAlignedTopAppBar(
-                    title = { Text(STR.appTitle, fontWeight = FontWeight.Bold) },
-                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background,
-                        titleContentColor = MaterialTheme.colorScheme.primary
-                    ),
-                    navigationIcon = {
-                        if (mode != "MENU") {
-                            IconButton(onClick = {
-                                if (mode == "SERVER") {
-                                    scope.launch(Dispatchers.IO) {
-                                        serverInstance?.stop()
-                                        withContext(Dispatchers.Main) { isServerRunning = false }
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.background,
+            tonalElevation = 3.dp
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                CustomTitleBar(
+                    title = STR.appTitle,
+                    window = window.window,
+                    onClose = { window.window.dispose() },
+                    showBackButton = mode != "MENU",
+                    onBack = {
+                        if (mode == "SERVER") {
+                            scope.launch(Dispatchers.IO) {
+                                serverInstance?.stop()
+                                withContext(Dispatchers.Main) { isServerRunning = false }
+                            }
+                        }
+                        if (isSyncing) syncJob?.cancel()
+                        mode = "MENU"
+                    },
+                    isLanguageMenuExpanded = isLanguageMenuExpanded,
+                    onLanguageMenuToggle = { isLanguageMenuExpanded = !isLanguageMenuExpanded },
+                    onLanguageMenuDismiss = { isLanguageMenuExpanded = false }
+                )
+
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (mode == "MENU") {
+                        Row(modifier = Modifier.padding(bottom = 16.dp)) {
+                            GameTypeButton("Osu! Lazer", gameType == "LAZER") { gameType = "LAZER" }
+                            Spacer(Modifier.width(16.dp))
+                            GameTypeButton("Osu! Stable", gameType == "STABLE") { gameType = "STABLE" }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = osuPath,
+                        onValueChange = { osuPath = it },
+                        label = { Text(if (gameType == "LAZER") STR.pathLazer else STR.pathStable) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        trailingIcon = {
+                            IconButton(
+                                onClick = { directoryPicker.launch() },
+                                modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
+                            ) {
+                                Icon(Icons.Default.FolderOpen, null)
+                            }
+                        }
+                    )
+
+                    Spacer(Modifier.height(16.dp))
+
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AnimatedContent(targetState = mode) { currentMode ->
+                            when (currentMode) {
+                                "MENU" -> MenuScreen(
+                                    onServerClick = { mode = "SERVER" },
+                                    onClientClick = { mode = "CLIENT" }
+                                )
+                                "SERVER" -> ServerScreen(myIp, isServerRunning, gameType) {
+                                    if (isServerRunning) {
+                                        scope.launch(Dispatchers.IO) {
+                                            try {
+                                                serverInstance?.stop()
+                                                withContext(Dispatchers.Main) {
+                                                    isServerRunning = false
+                                                    log(STR.serverStopped)
+                                                }
+                                            } catch (e: Exception) {
+                                                withContext(Dispatchers.Main) {
+                                                    log("Error: ${e.message}")
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        try {
+                                            val srv = SyncServer(File(osuPath), gameType, 8085)
+                                            srv.start()
+                                            serverInstance = srv
+                                            isServerRunning = true
+                                            log("${STR.serverRunning} (Port: 8085)")
+                                        } catch (e: Exception) {
+                                            log("Error: ${e.message}")
+                                            e.printStackTrace()
+                                        }
                                     }
                                 }
-                                if (isSyncing) syncJob?.cancel()
-                                mode = "MENU"
-                            }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                        }
-                    },
-                    actions = {
-                        Box {
-                            IconButton(onClick = { isLanguageMenuExpanded = true }) {
-                                Icon(Icons.Default.Language, "Language")
+                                "CLIENT" -> ClientScreen(
+                                    targetIpInput,
+                                    { targetIpInput = it },
+                                    isSyncing,
+                                    {
+                                        syncJob = scope.launch {
+                                            SyncClient().syncFrom(
+                                                targetIpInput,
+                                                File(osuPath),
+                                                gameType
+                                            ) { log(it) }
+                                        }
+                                    },
+                                    { log(STR.statusStoppedByUser); syncJob?.cancel() }
+                                )
                             }
-                            DropdownMenu(expanded = isLanguageMenuExpanded, onDismissRequest = { isLanguageMenuExpanded = false }) {
-                                AppLanguage.entries.forEach { lang ->
-                                    DropdownMenuItem(
-                                        text = { Text(lang.title, fontWeight = if (AppRes.currentLanguage == lang) FontWeight.Bold else FontWeight.Normal) },
-                                        onClick = { AppRes.currentLanguage = lang; isLanguageMenuExpanded = false },
-                                        leadingIcon = { if (AppRes.currentLanguage == lang) Icon(Icons.Default.Check, null) }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                    ElevatedCard(
+                        modifier = Modifier.fillMaxWidth().height(150.dp),
+                        colors = CardDefaults.elevatedCardColors(
+                            containerColor = Color.Black.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                STR.logsTitle,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Divider(
+                                Modifier.padding(vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                            )
+                            SelectionContainer {
+                                Box(Modifier.fillMaxSize()) {
+                                    Text(
+                                        text = logs,
+                                        color = Color.LightGray,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.verticalScroll(scrollState)
                                     )
                                 }
                             }
                         }
-                    }
-                )
-            }
-        ) { padding ->
-            Column(modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (mode == "MENU") {
-                    Row(modifier = Modifier.padding(bottom = 16.dp)) {
-                        GameTypeButton("Osu! Lazer", gameType == "LAZER") { gameType = "LAZER" }
-                        Spacer(Modifier.width(16.dp))
-                        GameTypeButton("Osu! Stable", gameType == "STABLE") { gameType = "STABLE" }
+                        LaunchedEffect(logs) { scrollState.animateScrollTo(scrollState.maxValue) }
                     }
                 }
+            }
+        }
+    }
+}
 
-                OutlinedTextField(
-                    value = osuPath,
-                    onValueChange = { osuPath = it },
-                    label = { Text(if (gameType == "LAZER") STR.pathLazer else STR.pathStable) },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    trailingIcon = {
-                        IconButton(onClick = { directoryPicker.launch() }, modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)) {
-                            Icon(Icons.Default.FolderOpen, null)
-                        }
-                    }
-                )
-
-                Spacer(Modifier.height(16.dp))
-
-                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    AnimatedContent(targetState = mode) { currentMode ->
-                        when (currentMode) {
-                            "MENU" -> MenuScreen(onServerClick = { mode = "SERVER" }, onClientClick = { mode = "CLIENT" })
-                            "SERVER" -> ServerScreen(myIp, isServerRunning, gameType) {
-                                if (isServerRunning) {
-                                    scope.launch(Dispatchers.IO) {
-                                        try { serverInstance?.stop(); withContext(Dispatchers.Main) { isServerRunning = false; log(STR.serverStopped) } }
-                                        catch (e: Exception) { withContext(Dispatchers.Main) { log("Error: ${e.message}") } }
-                                    }
-                                } else {
-                                    try {
-                                        val srv = SyncServer(File(osuPath), gameType, 8085)
-                                        srv.start()
-                                        serverInstance = srv
-                                        isServerRunning = true
-                                        log("${STR.serverRunning} (Port: 8085)")
-                                    } catch (e: Exception) { log("Error: ${e.message}"); e.printStackTrace() }
-                                }
-                            }
-                            "CLIENT" -> ClientScreen(targetIpInput, { targetIpInput = it }, isSyncing,
-                                { syncJob = scope.launch { SyncClient().syncFrom(targetIpInput, File(osuPath), gameType) { log(it) } } },
-                                { log(STR.statusStoppedByUser); syncJob?.cancel() }
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+fun WindowScope.CustomTitleBar(
+    title: String,
+    window: java.awt.Window,
+    onClose: () -> Unit,
+    showBackButton: Boolean,
+    onBack: () -> Unit,
+    isLanguageMenuExpanded: Boolean,
+    onLanguageMenuToggle: () -> Unit,
+    onLanguageMenuDismiss: () -> Unit
+) {
+    WindowDraggableArea(
+        modifier = Modifier.fillMaxWidth().height(48.dp)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 3.dp
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (showBackButton) {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                "Back",
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
+                    } else {
+                        Spacer(Modifier.width(8.dp))
                     }
+                    Text(
+                        title,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
                 }
 
-                Spacer(Modifier.height(16.dp))
-                ElevatedCard(modifier = Modifier.fillMaxWidth().height(150.dp), colors = CardDefaults.elevatedCardColors(containerColor = Color.Black.copy(alpha=0.5f))) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(STR.logsTitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                        Divider(Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.primary.copy(alpha=0.3f))
-                        SelectionContainer {
-                            Box(Modifier.fillMaxSize()) {
-                                Text(text = logs, color = Color.LightGray, style = MaterialTheme.typography.bodySmall, modifier = Modifier.verticalScroll(scrollState))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box {
+                        IconButton(onClick = onLanguageMenuToggle) {
+                            Icon(Icons.Default.Language, "Language")
+                        }
+                        DropdownMenu(
+                            expanded = isLanguageMenuExpanded,
+                            onDismissRequest = onLanguageMenuDismiss
+                        ) {
+                            AppLanguage.entries.forEach { lang ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            lang.title,
+                                            fontWeight = if (AppRes.currentLanguage == lang)
+                                                FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    onClick = {
+                                        AppRes.currentLanguage = lang
+                                        onLanguageMenuDismiss()
+                                    },
+                                    leadingIcon = {
+                                        if (AppRes.currentLanguage == lang)
+                                            Icon(Icons.Default.Check, null)
+                                    }
+                                )
                             }
                         }
                     }
-                    LaunchedEffect(logs) { scrollState.animateScrollTo(scrollState.maxValue) }
+
+                    IconButton(onClick = {
+                        if (window is java.awt.Frame) {
+                            window.extendedState = java.awt.Frame.ICONIFIED
+                        }
+                    }) {
+                        Icon(Icons.Default.Minimize, "Minimize", modifier = Modifier.size(20.dp))
+                    }
+
+                    IconButton(onClick = onClose) {
+                        Icon(
+                            Icons.Default.Close,
+                            "Close",
+                            tint = Color(0xFFE81123),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
         }
@@ -271,16 +410,6 @@ fun ServerScreen(ip: String, isRunning: Boolean, gameType: String, onToggleServe
 }
 
 fun main() {
-    System.setProperty("flatlaf.useWindowDecorations", "true")
-    System.setProperty("flatlaf.menuBarEmbedded", "true")
-    System.setProperty("flatlaf.titleBarBackground", "false")
-
-    if (System.getProperty("os.name").lowercase().contains("windows")) {
-        System.setProperty("flatlaf.useNativeWindowDecorations", "true")
-    }
-
-    JFrame.setDefaultLookAndFeelDecorated(true)
-
     FlatDarkLaf.setup()
 
     application {
@@ -291,15 +420,11 @@ fun main() {
             title = "Osync",
             state = windowState,
             icon = painterResource("icon.png"),
-            undecorated = false
+            undecorated = true,
+            transparent = true,
+            resizable = false
         ) {
-            SideEffect {
-                window.rootPane.putClientProperty("flatlaf.menuBarEmbedded", true)
-                window.rootPane.putClientProperty("JRootPane.titleBarBackground", java.awt.Color(18, 18, 18))
-                window.rootPane.putClientProperty("JRootPane.titleBarForeground", java.awt.Color.WHITE)
-            }
-
-            App()
+            App(this)
         }
     }
 }
