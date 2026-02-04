@@ -1,0 +1,65 @@
+name: Build Desktop Apps
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  #Windows (MSI + Portable ZIP)
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Windows Apps
+        run: ./gradlew :composeApp:packageMsi :composeApp:packageZip
+
+      - name: Upload Windows MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: Osync-Windows-Installer
+          path: composeApp/build/compose/binaries/main/msi/*.msi
+
+      - name: Upload Windows Portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: Osync-Windows-Portable
+          path: composeApp/build/compose/binaries/main/zip/*.zip
+
+  #Linux (AppImage)
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2
+
+      - name: Build Linux AppImage
+        run: ./gradlew :composeApp:packageAppImage
+
+      - name: Upload Linux AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: Osync-Linux-AppImage
+          path: composeApp/build/compose/binaries/main/appimage/*.AppImage
