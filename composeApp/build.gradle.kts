@@ -31,13 +31,13 @@ kotlin {
             implementation("io.github.vinceglb:filekit-compose:0.8.2")
             implementation("com.formdev:flatlaf:3.4.1")
 
-            implementation("io.ktor:ktor-server-core:2.3.7")
-            implementation("io.ktor:ktor-server-netty:2.3.7")
-            implementation("io.ktor:ktor-server-content-negotiation:2.3.7")
-            implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.7")
-            implementation("io.ktor:ktor-client-core:2.3.7")
-            implementation("io.ktor:ktor-client-cio:2.3.7")
-            implementation("io.ktor:ktor-client-content-negotiation:2.3.7")
+            implementation("io.ktor:ktor-server-core:3.4.0")
+            implementation("io.ktor:ktor-server-netty:3.4.0")
+            implementation("io.ktor:ktor-server-content-negotiation:3.4.0")
+            implementation("io.ktor:ktor-serialization-kotlinx-json:3.4.0")
+            implementation("io.ktor:ktor-client-core:3.4.0")
+            implementation("io.ktor:ktor-client-cio:3.4.0")
+            implementation("io.ktor:ktor-client-content-negotiation:3.4.0")
         }
     }
 }

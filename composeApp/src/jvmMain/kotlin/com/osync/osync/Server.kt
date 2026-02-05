@@ -11,7 +11,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 class SyncServer(private val osuDir: File, private val gameType: String, private val port: Int = 8085) {
-    private var server: NettyApplicationEngine? = null
+    private var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? = null
 
     fun start() {
         server = embeddedServer(Netty, port = port) {
