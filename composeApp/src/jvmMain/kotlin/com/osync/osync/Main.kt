@@ -98,7 +98,9 @@ fun WindowScope.App(window: FrameWindowScope) {
                 CustomTitleBar(
                     title = STR.appTitle,
                     window = window.window,
-                    onClose = { window.window.dispose() },
+                    onClose = {
+                        System.exit(0)
+                    },
                     showBackButton = mode != "MENU",
                     onBack = {
                         if (mode == "SERVER") {
