@@ -99,6 +99,7 @@ fun WindowScope.App(window: FrameWindowScope) {
         discoveryJob = scope.launch {
             isDiscovering = true
             discoveredServers = emptyList()
+            log("${STR.autoSearchInProgress} (${OsuUtils.getLocalSiteLocalAddresses().joinToString().ifBlank { "no local IPv4" }})")
             try {
                 val found = networkDiscovery.discoverServers(gameType)
                 discoveredServers = found

@@ -14,7 +14,7 @@ class SyncServer(private val osuDir: File, private val gameType: String, private
     private var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? = null
 
     fun start() {
-        server = embeddedServer(Netty, port = port) {
+        server = embeddedServer(Netty, host = "0.0.0.0", port = port) {
             routing {
                 get("/ping") { call.respondText(gameType) }
 

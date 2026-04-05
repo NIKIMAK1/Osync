@@ -31,7 +31,14 @@ class SyncClient {
     private val semaphore = Semaphore(50)
 
     suspend fun syncFrom(inputAddress: String, localOsuDir: File, gameType: String, onLog: (String) -> Unit) = withContext(Dispatchers.IO) {
-        val baseUrl = if (inputAddress.startsWith("http")) inputAddress.removeSuffix("/") else "http://$inputAddress:8085"
+        val baseUrl = normalizeBaseUrl(inputAddress)
+
+        if (baseUrl == null) {
+            onLog("Connection error: invalid address")
+            return@withContext
+        }
+
+        onLog("Connecting to: $baseUrl")
 
         if (!localOsuDir.exists()) {
             onLog(AppRes.string.errFolderNotFound)
@@ -46,7 +53,7 @@ class SyncClient {
                     return@withContext
                 }
             } catch (e: Exception) {
-                onLog("Connection error: $baseUrl")
+                onLog("Connection error: $baseUrl (${e.javaClass.simpleName}: ${e.message ?: "no details"})")
                 return@withContext
             }
 
@@ -65,6 +72,21 @@ class SyncClient {
         } catch (e: Exception) {
             onLog("Error: ${e.message}")
             e.printStackTrace()
+        }
+    }
+
+    private fun normalizeBaseUrl(inputAddress: String): String? {
+        val normalized = inputAddress.trim().removeSuffix("/")
+        if (normalized.isBlank()) return null
+
+        if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+            return normalized
+        }
+
+        return if (normalized.contains(":")) {
+            "http://$normalized"
+        } else {
+            "http://$normalized:8085"
         }
     }
 

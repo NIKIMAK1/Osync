@@ -25,10 +25,10 @@ data class DiscoveredServer(
 class LocalNetworkDiscovery {
     private val httpClient = HttpClient(CIO) {
         engine {
-            requestTimeout = 700
+            requestTimeout = 1500
             endpoint {
-                connectTimeout = 500
-                keepAliveTime = 500
+                connectTimeout = 1000
+                keepAliveTime = 1000
                 maxConnectionsPerRoute = 128
                 pipelineMaxSize = 20
             }
