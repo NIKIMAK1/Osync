@@ -1,6 +1,7 @@
 package osync.osync
 
 import java.io.File
+import java.net.Inet4Address
 import java.net.NetworkInterface
 
 object OsuUtils {
@@ -29,7 +30,7 @@ object OsuUtils {
 
     fun getLocalIp(): String {
         return try {
-            val interfaces = NetworkInterface.getNetworkInterfaces().toList()
+            val interfaces = getFilteredInterfaces()
             val homeIp = interfaces.asSequence()
                 .flatMap { it.inetAddresses.asSequence() }
                 .filter { !it.isLoopbackAddress && it.isSiteLocalAddress && it.hostAddress.indexOf(':') == -1 }
@@ -48,6 +49,32 @@ object OsuUtils {
                 .firstOrNull() ?: "127.0.0.1"
         } catch (e: Exception) {
             "Ошибка сети"
+        }
+    }
+
+    fun getLocalSiteLocalAddresses(): List<String> {
+        return try {
+            getFilteredInterfaces().asSequence()
+                .flatMap { it.inetAddresses.asSequence() }
+                .filterIsInstance<Inet4Address>()
+                .filter { !it.isLoopbackAddress && it.isSiteLocalAddress }
+                .map { it.hostAddress }
+                .distinct()
+                .toList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun getFilteredInterfaces(): List<NetworkInterface> {
+        return NetworkInterface.getNetworkInterfaces().toList().filter {
+            val name = "${it.name} ${it.displayName}".lowercase()
+            !name.contains("docker") &&
+                !name.contains("br-") &&
+                !name.contains("veth") &&
+                !name.contains("virtual") &&
+                !name.contains("vmware") &&
+                !name.contains("tailscale")
         }
     }
 

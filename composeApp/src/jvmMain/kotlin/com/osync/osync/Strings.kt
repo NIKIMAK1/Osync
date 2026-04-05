@@ -22,6 +22,12 @@ interface Strings {
     val serverStopped: String
     val modeClientTitle: String
     val ipFieldLabel: String
+    val autoSearchTitle: String
+    val autoSearchButton: String
+    val manualInputButton: String
+    val autoSearchInProgress: String
+    val autoSearchEmpty: String
+    val autoSearchFound: String
     val btnStartDownload: String
     val btnStopDownload: String
     val logsTitle: String
@@ -49,6 +55,12 @@ object EnStrings : Strings {
     override val serverStopped = "Server stopped"
     override val modeClientTitle = "Download Maps"
     override val ipFieldLabel = "Server IP or Link"
+    override val autoSearchTitle = "Local network hosts"
+    override val autoSearchButton = "Search again"
+    override val manualInputButton = "Manual input"
+    override val autoSearchInProgress = "Searching local network..."
+    override val autoSearchEmpty = "No active hosts found"
+    override val autoSearchFound = "Select a host found automatically"
     override val btnStartDownload = "Start Download"
     override val btnStopDownload = "Stop"
     override val logsTitle = "LOGS"
@@ -76,6 +88,12 @@ object RuStrings : Strings {
     override val serverStopped = "Сервер остановлен"
     override val modeClientTitle = "Скачивание карт"
     override val ipFieldLabel = "IP Адрес или ссылка"
+    override val autoSearchTitle = "Компьютеры в локальной сети"
+    override val autoSearchButton = "Искать снова"
+    override val manualInputButton = "Ручной ввод"
+    override val autoSearchInProgress = "Ищу серверы в локальной сети..."
+    override val autoSearchEmpty = "Активные раздающие компьютеры не найдены"
+    override val autoSearchFound = "Выберите найденный компьютер"
     override val btnStartDownload = "Начать скачивание"
     override val btnStopDownload = "Остановить"
     override val logsTitle = "ЛОГИ"

@@ -2,6 +2,8 @@ package osync.osync
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -12,6 +14,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -74,6 +77,10 @@ fun WindowScope.App(window: FrameWindowScope) {
     var mode by remember { mutableStateOf("MENU") }
     var serverInstance by remember { mutableStateOf<SyncServer?>(null) }
     var isServerRunning by remember { mutableStateOf(false) }
+    val networkDiscovery = remember { LocalNetworkDiscovery() }
+    var discoveryJob by remember { mutableStateOf<Job?>(null) }
+    var isDiscovering by remember { mutableStateOf(false) }
+    var discoveredServers by remember { mutableStateOf<List<DiscoveredServer>>(emptyList()) }
     val myIp = remember { OsuUtils.getLocalIp() }
     var targetIpInput by remember { mutableStateOf("") }
 
@@ -85,6 +92,35 @@ fun WindowScope.App(window: FrameWindowScope) {
 
     LaunchedEffect(Unit) {
         (window.window as? java.awt.Frame)?.isResizable = false
+    }
+
+    fun startDiscovery() {
+        discoveryJob?.cancel()
+        discoveryJob = scope.launch {
+            isDiscovering = true
+            discoveredServers = emptyList()
+            try {
+                val found = networkDiscovery.discoverServers(gameType)
+                discoveredServers = found
+                if (found.isEmpty()) {
+                    log(STR.autoSearchEmpty)
+                } else {
+                    log("${STR.autoSearchTitle}: ${found.joinToString { it.address }}")
+                }
+            } finally {
+                isDiscovering = false
+            }
+        }
+    }
+
+    LaunchedEffect(mode, gameType) {
+        if (mode == "CLIENT") {
+            startDiscovery()
+        } else {
+            discoveryJob?.cancel()
+            isDiscovering = false
+            discoveredServers = emptyList()
+        }
     }
 
     OsyncTheme {
@@ -109,6 +145,7 @@ fun WindowScope.App(window: FrameWindowScope) {
                                 withContext(Dispatchers.Main) { isServerRunning = false }
                             }
                         }
+                        discoveryJob?.cancel()
                         if (isSyncing) syncJob?.cancel()
                         mode = "MENU"
                     },
@@ -188,6 +225,10 @@ fun WindowScope.App(window: FrameWindowScope) {
                                 "CLIENT" -> ClientScreen(
                                     targetIpInput,
                                     { targetIpInput = it },
+                                    discoveredServers,
+                                    isDiscovering,
+                                    { startDiscovery() },
+                                    { targetIpInput = it.address },
                                     isSyncing,
                                     {
                                         syncJob = scope.launch {
@@ -339,12 +380,116 @@ fun WindowScope.CustomTitleBar(
 }
 
 @Composable
-fun ClientScreen(targetIp: String, onIpChange: (String) -> Unit, isSyncing: Boolean, onStartSync: () -> Unit, onStopSync: () -> Unit) {
+fun ClientScreen(
+    targetIp: String,
+    onIpChange: (String) -> Unit,
+    discoveredServers: List<DiscoveredServer>,
+    isDiscovering: Boolean,
+    onDiscover: () -> Unit,
+    onServerSelected: (DiscoveredServer) -> Unit,
+    isSyncing: Boolean,
+    onStartSync: () -> Unit,
+    onStopSync: () -> Unit
+) {
+    var manualMode by rememberSaveable { mutableStateOf(false) }
+
     Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Text(AppRes.string.modeClientTitle, style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(32.dp))
-        OutlinedTextField(value = targetIp, onValueChange = onIpChange, label = { Text(AppRes.string.ipFieldLabel) }, enabled = !isSyncing, leadingIcon = { Icon(Icons.Default.Computer, null) }, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(0.6f))
-        Spacer(Modifier.height(48.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(0.6f),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            FilledTonalButton(
+                onClick = {
+                    manualMode = false
+                    onDiscover()
+                },
+                enabled = !isSyncing && !isDiscovering,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Search, null)
+                Spacer(Modifier.width(8.dp))
+                Text(AppRes.string.autoSearchButton)
+            }
+            OutlinedButton(
+                onClick = {
+                    manualMode = true
+                    onIpChange("")
+                },
+                enabled = !isSyncing,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Edit, null)
+                Spacer(Modifier.width(8.dp))
+                Text(AppRes.string.manualInputButton)
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        if (manualMode) {
+            OutlinedTextField(
+                value = targetIp,
+                onValueChange = onIpChange,
+                label = { Text(AppRes.string.ipFieldLabel) },
+                enabled = !isSyncing,
+                leadingIcon = { Icon(Icons.Default.Computer, null) },
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth(0.6f)
+            )
+        } else {
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(0.6f).heightIn(min = 120.dp, max = 220.dp),
+                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(Modifier.fillMaxSize().padding(16.dp)) {
+                    Text(AppRes.string.autoSearchTitle, style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    when {
+                        isDiscovering -> {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(12.dp))
+                            Text(AppRes.string.autoSearchInProgress)
+                        }
+
+                        discoveredServers.isEmpty() -> {
+                            Text(AppRes.string.autoSearchEmpty, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+
+                        else -> {
+                            Text(AppRes.string.autoSearchFound, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(discoveredServers) { server ->
+                                    ElevatedCard(
+                                        onClick = {
+                                            manualMode = true
+                                            onServerSelected(server)
+                                        },
+                                        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.Router, null)
+                                                Spacer(Modifier.width(10.dp))
+                                                Text(server.address)
+                                            }
+                                            if (targetIp == server.address) {
+                                                Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(28.dp))
         if (isSyncing) {
             Button(onClick = onStopSync, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error), modifier = Modifier.height(64.dp).fillMaxWidth(0.5f)) {
                 CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 3.dp)
