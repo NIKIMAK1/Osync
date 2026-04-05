@@ -1,8 +1,79 @@
 package osync.osync
 
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.net.SocketTimeoutException
+import java.util.concurrent.ConcurrentHashMap
+
+data class DiscoveredServer(
+    val address: String,
+    val gameType: String
+)
+
+class LocalNetworkDiscovery {
+    private val httpClient = HttpClient(CIO) {
+        engine {
+            requestTimeout = 700
+            endpoint {
+                connectTimeout = 500
+                keepAliveTime = 500
+                maxConnectionsPerRoute = 128
+                pipelineMaxSize = 20
+            }
+        }
+    }
+
+    suspend fun discoverServers(expectedGameType: String): List<DiscoveredServer> = withContext(Dispatchers.IO) {
+        val localAddresses = OsuUtils.getLocalSiteLocalAddresses()
+        if (localAddresses.isEmpty()) return@withContext emptyList()
+
+        val hostsToCheck = localAddresses
+            .flatMap { localIp -> subnetHosts(localIp).filter { it != localIp } }
+            .toSet()
+
+        val found = ConcurrentHashMap<String, DiscoveredServer>()
+        val semaphore = Semaphore(64)
+
+        coroutineScope {
+            hostsToCheck.map { host ->
+                async {
+                    semaphore.withPermit {
+                        try {
+                            val response = httpClient.get("http://$host:8085/ping")
+                            val remoteType = response.bodyAsText().trim()
+                            if (remoteType == expectedGameType) {
+                                found[host] = DiscoveredServer(address = host, gameType = remoteType)
+                            }
+                        } catch (_: SocketTimeoutException) {
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+
+        found.values.sortedBy { it.address }
+    }
+
+    private fun subnetHosts(ip: String): List<String> {
+        val parts = ip.split(".")
+        if (parts.size != 4) return emptyList()
+        val prefix = parts.take(3).joinToString(".")
+        return (1..254).map { "$prefix.$it" }
+    }
+}
 
 object OsuUtils {
     fun getLazerPath(): File? {
