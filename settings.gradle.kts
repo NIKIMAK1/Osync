@@ -25,6 +25,8 @@ dependencyResolutionManagement {
             }
         }
         mavenCentral()
+        maven("https://artifacts.consensys.net/public/maven/maven/")
+        maven("https://jitpack.io")
     }
 }
 

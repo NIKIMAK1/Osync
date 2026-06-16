@@ -1,19 +1,31 @@
-*.iml
-.kotlin
-.gradle
+# Gradle
+.gradle/
+build/
 **/build/
-xcuserdata
 !src/**/build/
+
+# Kotlin/KMP
+.kotlin/
+.kotlin-internal/
+
+# IntelliJ IDEA / IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+.gigaide/
+
+# Local configuration
 local.properties
-.idea
+
+# OS files
 .DS_Store
-captures
-.externalNativeBuild
-.cxx
-*.xcodeproj/*
-!*.xcodeproj/project.pbxproj
-!*.xcodeproj/xcshareddata/
-!*.xcodeproj/project.xcworkspace/
-!*.xcworkspace/contents.xcworkspacedata
-**/xcshareddata/WorkspaceSettings.xcsettings
-node_modules/
+Thumbs.db
+*.swp
+
+# AppImage packaging output & tools
+appimagetool-x86_64.AppImage
+build_appimage/
+
+# Log files
+*.log

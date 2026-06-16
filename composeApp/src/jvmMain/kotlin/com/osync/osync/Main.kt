@@ -83,6 +83,7 @@ fun WindowScope.App(window: FrameWindowScope) {
     var discoveredServers by remember { mutableStateOf<List<DiscoveredServer>>(emptyList()) }
     val myIp = remember { OsuUtils.getLocalIp() }
     var targetIpInput by remember { mutableStateOf("") }
+    var p2pAddress by remember { mutableStateOf("") }
 
     val scrollState = rememberScrollState()
     val directoryPicker = rememberDirectoryPickerLauncher(title = STR.chooseFolder) { directory ->
@@ -143,8 +144,14 @@ fun WindowScope.App(window: FrameWindowScope) {
                         if (mode == "SERVER") {
                             scope.launch(Dispatchers.IO) {
                                 serverInstance?.stop()
-                                withContext(Dispatchers.Main) { isServerRunning = false }
+                                P2PManager.stopAll()
+                                withContext(Dispatchers.Main) {
+                                    p2pAddress = ""
+                                    isServerRunning = false
+                                }
                             }
+                        } else {
+                            P2PManager.stopAll()
                         }
                         discoveryJob?.cancel()
                         if (isSyncing) syncJob?.cancel()
@@ -173,6 +180,7 @@ fun WindowScope.App(window: FrameWindowScope) {
                         label = { Text(if (gameType == "LAZER") STR.pathLazer else STR.pathStable) },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
+                        singleLine = true,
                         trailingIcon = {
                             IconButton(
                                 onClick = { directoryPicker.launch() },
@@ -195,12 +203,14 @@ fun WindowScope.App(window: FrameWindowScope) {
                                     onServerClick = { mode = "SERVER" },
                                     onClientClick = { mode = "CLIENT" }
                                 )
-                                "SERVER" -> ServerScreen(myIp, isServerRunning, gameType) {
+                                "SERVER" -> ServerScreen(myIp, p2pAddress, isServerRunning, gameType) {
                                     if (isServerRunning) {
                                         scope.launch(Dispatchers.IO) {
                                             try {
                                                 serverInstance?.stop()
+                                                P2PManager.stopAll()
                                                 withContext(Dispatchers.Main) {
+                                                    p2pAddress = ""
                                                     isServerRunning = false
                                                     log(STR.serverStopped)
                                                 }
@@ -217,6 +227,21 @@ fun WindowScope.App(window: FrameWindowScope) {
                                             serverInstance = srv
                                             isServerRunning = true
                                             log("${STR.serverRunning} (Port: 8085)")
+
+                                            scope.launch(Dispatchers.IO) {
+                                                log("Starting P2P Host...")
+                                                try {
+                                                    val p2pAddrs = P2PManager.startHost(8085)
+                                                    withContext(Dispatchers.Main) {
+                                                        p2pAddress = p2pAddrs.lineSequence().firstOrNull { !it.contains("127.0.0.1") } ?: p2pAddrs
+                                                        log("P2P Host started! Address: $p2pAddress")
+                                                    }
+                                                } catch (e: Exception) {
+                                                    withContext(Dispatchers.Main) {
+                                                        log("P2P Host failed to start: ${e.message}")
+                                                    }
+                                                }
+                                            }
                                         } catch (e: Exception) {
                                             log("Error: ${e.message}")
                                             e.printStackTrace()
@@ -233,14 +258,33 @@ fun WindowScope.App(window: FrameWindowScope) {
                                     isSyncing,
                                     {
                                         syncJob = scope.launch {
-                                            SyncClient().syncFrom(
-                                                targetIpInput,
-                                                File(osuPath),
-                                                gameType
-                                            ) { log(it) }
+                                            try {
+                                                val target = targetIpInput.trim()
+                                                val isP2P = target.startsWith("/")
+                                                val finalAddress = if (isP2P) {
+                                                    log("Initializing P2P tunnel...")
+                                                    val localPort = withContext(Dispatchers.IO) {
+                                                        P2PManager.startClientTunnel(target)
+                                                    }
+                                                    log("P2P Tunnel active on port $localPort")
+                                                    "127.0.0.1:$localPort"
+                                                } else {
+                                                    target
+                                                }
+
+                                                SyncClient().syncFrom(
+                                                    finalAddress,
+                                                    File(osuPath),
+                                                    gameType
+                                                ) { log(it) }
+                                            } catch (e: Exception) {
+                                                log("Error: ${e.message}")
+                                            } finally {
+                                                P2PManager.stopAll()
+                                            }
                                         }
                                     },
-                                    { log(STR.statusStoppedByUser); syncJob?.cancel() }
+                                    { log(STR.statusStoppedByUser); syncJob?.cancel(); P2PManager.stopAll() }
                                 )
                             }
                         }
@@ -398,7 +442,7 @@ fun ClientScreen(
         Text(AppRes.string.modeClientTitle, style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(32.dp))
         Row(
-            modifier = Modifier.fillMaxWidth(0.6f),
+            modifier = Modifier.widthIn(max = 500.dp).fillMaxWidth(0.6f),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             FilledTonalButton(
@@ -435,11 +479,32 @@ fun ClientScreen(
                 enabled = !isSyncing,
                 leadingIcon = { Icon(Icons.Default.Computer, null) },
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(0.6f)
+                singleLine = true,
+                modifier = Modifier.widthIn(max = 500.dp).fillMaxWidth(0.6f)
             )
+            if (targetIp.trim().startsWith("/")) {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        Icons.Default.CloudQueue,
+                        null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        AppRes.string.clientP2PBadge,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
         } else {
             ElevatedCard(
-                modifier = Modifier.fillMaxWidth(0.6f).heightIn(min = 120.dp, max = 220.dp),
+                modifier = Modifier.widthIn(max = 500.dp).fillMaxWidth(0.6f).heightIn(min = 120.dp, max = 220.dp),
                 colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -492,13 +557,13 @@ fun ClientScreen(
         }
         Spacer(Modifier.height(28.dp))
         if (isSyncing) {
-            Button(onClick = onStopSync, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error), modifier = Modifier.height(64.dp).fillMaxWidth(0.5f)) {
+            Button(onClick = onStopSync, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error), modifier = Modifier.height(64.dp).widthIn(max = 400.dp).fillMaxWidth(0.5f)) {
                 CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 3.dp)
                 Spacer(Modifier.width(16.dp))
                 Text(AppRes.string.btnStopDownload, style = MaterialTheme.typography.titleMedium)
             }
         } else {
-            FilledTonalButton(onClick = onStartSync, enabled = targetIp.isNotBlank(), modifier = Modifier.height(64.dp).fillMaxWidth(0.5f)) {
+            FilledTonalButton(onClick = onStartSync, enabled = targetIp.isNotBlank(), modifier = Modifier.height(64.dp).widthIn(max = 400.dp).fillMaxWidth(0.5f)) {
                 Icon(Icons.Default.Sync, null)
                 Spacer(Modifier.width(12.dp))
                 Text(AppRes.string.btnStartDownload, style = MaterialTheme.typography.titleMedium)
@@ -536,23 +601,184 @@ fun BigOptionCard(title: String, subtitle: String, icon: androidx.compose.ui.gra
 }
 
 @Composable
-fun ServerScreen(ip: String, isRunning: Boolean, gameType: String, onToggleServer: () -> Unit) {
-    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+fun CopyButton(
+    textToCopy: String,
+    isEnabled: Boolean,
+    modifier: Modifier = Modifier,
+    buttonColor: Color? = null
+) {
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    val colors = if (buttonColor != null) {
+        ButtonDefaults.buttonColors(containerColor = buttonColor)
+    } else {
+        ButtonDefaults.buttonColors()
+    }
+
+    Button(
+        onClick = {
+            if (textToCopy.isNotEmpty()) {
+                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(textToCopy))
+                copied = true
+                scope.launch {
+                    kotlinx.coroutines.delay(2000)
+                    copied = false
+                }
+            }
+        },
+        enabled = isEnabled && textToCopy.isNotEmpty(),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        modifier = modifier.height(36.dp),
+        colors = colors
+    ) {
+        Icon(
+            if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            if (copied) AppRes.string.btnCopied else AppRes.string.btnCopy,
+            style = MaterialTheme.typography.labelMedium
+        )
+    }
+}
+
+@Composable
+fun ServerScreen(
+    ip: String,
+    p2pAddress: String,
+    isRunning: Boolean,
+    gameType: String,
+    onToggleServer: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
         Text("${AppRes.string.modeHostTitle} ($gameType)", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(24.dp))
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = RoundedCornerShape(24.dp)) {
-            Text(ip, style = MaterialTheme.typography.displayMedium, modifier = Modifier.padding(48.dp, 24.dp), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(16.dp))
+
+        Row(
+            modifier = Modifier.widthIn(max = 750.dp).fillMaxWidth(0.85f),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // LAN Card
+            Card(
+                modifier = Modifier.weight(1f).height(220.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            AppRes.string.connectionMethodLan,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        SelectionContainer {
+                            Text(
+                                ip.ifBlank { "—" },
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            AppRes.string.connectionMethodLanDesc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                    CopyButton(
+                        textToCopy = ip,
+                        isEnabled = isRunning && ip.isNotEmpty()
+                    )
+                }
+            }
+
+            // P2P Internet Card
+            Card(
+                modifier = Modifier.weight(1f).height(220.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            AppRes.string.connectionMethodWan,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        if (isRunning && p2pAddress.isNotEmpty()) {
+                            SelectionContainer {
+                                Text(
+                                    text = p2pAddress,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    maxLines = 3,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = if (isRunning) AppRes.string.p2pGenerating else AppRes.string.p2pNotRunning,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.Gray,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            AppRes.string.connectionMethodWanDesc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                    CopyButton(
+                        textToCopy = p2pAddress,
+                        isEnabled = isRunning && p2pAddress.isNotEmpty(),
+                        buttonColor = MaterialTheme.colorScheme.secondary
+                    )
+                }
+            }
         }
-        Text(AppRes.string.ipHint, modifier = Modifier.padding(top = 16.dp))
-        Spacer(Modifier.height(48.dp))
-        Button(onClick = onToggleServer, modifier = Modifier.height(64.dp).fillMaxWidth(0.5f), colors = ButtonDefaults.buttonColors(containerColor = if (isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)) {
+
+        Spacer(Modifier.height(32.dp))
+        Button(
+            onClick = onToggleServer,
+            modifier = Modifier.height(64.dp).fillMaxWidth(0.5f),
+            colors = ButtonDefaults.buttonColors(containerColor = if (isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+        ) {
             Icon(if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow, null)
             Text(if (isRunning) " ${AppRes.string.btnStopServer}" else " ${AppRes.string.btnStartServer}")
         }
         if (isRunning) {
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(16.dp))
             LinearProgressIndicator(modifier = Modifier.width(250.dp))
-            Text(AppRes.string.serverRunning, modifier = Modifier.padding(top=8.dp))
+            Text(AppRes.string.serverRunning, modifier = Modifier.padding(top = 8.dp))
         }
     }
 }
