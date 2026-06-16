@@ -36,43 +36,73 @@ class TunnelProtocol(val localPort: Int) : ProtocolHandler<TunnelController>(Lon
         val controllerPromise = CompletableFuture<TunnelController>()
 
         if (!stream.isInitiator) {
+            val pendingBytes = ArrayList<ByteArray>()
+            var socketOutput: java.io.OutputStream? = null
+            var closed = false
+            val lock = Any()
+
+            val handler = object : SimpleChannelInboundHandler<ByteBuf>() {
+                override fun channelRead0(ctx: ChannelHandlerContext, msg: ByteBuf) {
+                    val bytes = ByteArray(msg.readableBytes())
+                    msg.readBytes(bytes)
+                    synchronized(lock) {
+                        val out = socketOutput
+                        if (out != null) {
+                            try {
+                                out.write(bytes)
+                                out.flush()
+                            } catch (e: Exception) {
+                                ctx.close()
+                                closed = true
+                            }
+                        } else {
+                            pendingBytes.add(bytes)
+                        }
+                    }
+                }
+
+                override fun channelInactive(ctx: ChannelHandlerContext) {
+                    super.channelInactive(ctx)
+                    synchronized(lock) {
+                        closed = true
+                    }
+                }
+            }
+            stream.pushHandler(handler)
+
             thread(name = "osync-host-tunnel-init", isDaemon = true) {
                 var socket: Socket? = null
                 try {
                     socket = Socket("127.0.0.1", localPort)
                     val socketInput = socket.getInputStream()
-                    val socketOutput = socket.getOutputStream()
+                    val out = socket.getOutputStream()
 
-                    stream.pushHandler(object : SimpleChannelInboundHandler<ByteBuf>() {
-                        override fun channelRead0(ctx: ChannelHandlerContext, msg: ByteBuf) {
-                            val bytes = ByteArray(msg.readableBytes())
-                            msg.readBytes(bytes)
-                            thread(name = "osync-host-netty-to-socket", isDaemon = true) {
-                                try {
-                                    socketOutput.write(bytes)
-                                    socketOutput.flush()
-                                } catch (e: Exception) {
-                                    ctx.close()
-                                    socket.close()
-                                }
-                            }
+                    synchronized(lock) {
+                        for (bytes in pendingBytes) {
+                            out.write(bytes)
                         }
-
-                        override fun channelInactive(ctx: ChannelHandlerContext) {
-                            super.channelInactive(ctx)
-                            socket.close()
-                        }
-                    })
+                        out.flush()
+                        pendingBytes.clear()
+                        socketOutput = out
+                    }
 
                     val buffer = ByteArray(8192)
-                    var bytesRead: Int
-                    while (socketInput.read(buffer).also { bytesRead = it } != -1) {
+                    var bytesRead = 0
+                    while (true) {
+                        val isClosed = synchronized(lock) { closed }
+                        if (isClosed) break
+                        bytesRead = socketInput.read(buffer)
+                        if (bytesRead == -1) break
                         val byteBuf = Unpooled.copiedBuffer(buffer, 0, bytesRead)
                         stream.writeAndFlush(byteBuf)
                     }
                 } catch (e: Exception) {
-                    // Ignored
+                    System.err.println("P2P Host tunnel error:")
+                    e.printStackTrace()
                 } finally {
+                    synchronized(lock) {
+                        closed = true
+                    }
                     socket?.close()
                     stream.close()
                 }
@@ -131,14 +161,12 @@ class P2PTunnelClient(
                 override fun channelRead0(ctx: ChannelHandlerContext, msg: ByteBuf) {
                     val bytes = ByteArray(msg.readableBytes())
                     msg.readBytes(bytes)
-                    thread(name = "osync-client-netty-to-socket", isDaemon = true) {
-                        try {
-                            socketOutput.write(bytes)
-                            socketOutput.flush()
-                        } catch (e: Exception) {
-                            ctx.close()
-                            socket.close()
-                        }
+                    try {
+                        socketOutput.write(bytes)
+                        socketOutput.flush()
+                    } catch (e: Exception) {
+                        ctx.close()
+                        socket.close()
                     }
                 }
 
@@ -155,7 +183,8 @@ class P2PTunnelClient(
                 stream.writeAndFlush(byteBuf)
             }
         } catch (e: Exception) {
-            // Error
+            System.err.println("P2P Client tunnel error:")
+            e.printStackTrace()
         } finally {
             socket.close()
             stream?.close()
@@ -229,21 +258,25 @@ object P2PManager {
         val peerId = host.peerId.toString()
 
         val ips = mutableListOf<String>()
-        publicIp?.let { ips.add(it) }
+        val primaryIp = OsuUtils.getLocalIp()
+        if (primaryIp != "127.0.0.1" && primaryIp != "Ошибка сети") {
+            ips.add(primaryIp)
+        }
         ips.addAll(OsuUtils.getLocalSiteLocalAddresses())
+        publicIp?.let { ips.add(it) }
         if (ips.isEmpty()) {
-            ips.add(OsuUtils.getLocalIp())
+            ips.add("127.0.0.1")
         }
 
         val formattedAddrs = ips
             .distinct()
-            .filter { it != "127.0.0.1" && it != "Ошибка сети" && it.isNotEmpty() }
+            .filter { it != "Ошибка сети" && it.isNotEmpty() }
             .map { "/ip4/$it/tcp/$port/p2p/$peerId" }
 
         return if (formattedAddrs.isNotEmpty()) {
             formattedAddrs.joinToString("\n")
         } else {
-            listenAddrs.joinToString("\n") { it.toString() }
+            listenAddrs.joinToString("\n") { "$it/p2p/$peerId" }
         }
     }
 

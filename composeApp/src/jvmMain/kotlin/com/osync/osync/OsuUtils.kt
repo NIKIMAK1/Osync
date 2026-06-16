@@ -215,7 +215,6 @@ object OsuUtils {
                 !name.contains("veth") &&
                 !name.contains("virtual") &&
                 !name.contains("vmware") &&
-                !name.contains("tailscale") &&
                 it.isUp &&
                 !it.isLoopback
         }
